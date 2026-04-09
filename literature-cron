@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""
+literature-cron: Run weekly literature review based on current day.
+Usage: literature-cron
+
+Day → Topic mapping:
+  Mon → Complex PCI Review
+  Tue → Heart Failure
+  Wed → DM/Lipid/Obesity
+  Thu → Structural Heart
+  Fri → ACS/Shock/MCS/Critical Care
+  Sat → Cardiomyopathy/PH/AF/Pericardial
+  Sun → Aging & Anti-Aging
+"""
+import glob
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime
+
+WORKSPACE = os.path.expanduser("~/.openclaw/workspace")
+READWISE_EMAIL = "amornj@library.readwise.io"
+
+# cron job IDs by day (weekday: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun)
+CRON_JOBS = {
+    0: ("Weekly Complex PCI Review",      "40dc4841-9c3f-42a9-a2ec-987e329b4105"),
+    1: ("Weekly Heart Failure Digest",    "4e096ade-9ffb-41c3-bacd-f543b209899c"),
+    2: ("Weekly DM/Lipid/Obesity Digest", "e71ff0d7-dac7-4bc6-a40c-6daa51f14e05"),
+    3: ("Weekly Structural Heart Digest", "fc66481b-5856-4ca0-a873-0e0708bfea20"),
+    4: ("Weekly ACS/Shock/MCS Digest",    "86d9e06f-db4c-4af2-84eb-d988ddc51612"),
+    5: ("Weekly Cardiomyopathy/PH/AF",   "b1c829ee-54d6-4bcb-ba1a-adccdf56bcd6"),
+    6: ("Weekly Aging & Anti-Aging",      "d7c98071-fdbe-4c23-a2ef-aeaa631312f8"),
+}
+
+
+def find_newest_pdf(since: float) -> str | None:
+    """Return the path of the newest PDF in WORKSPACE created after `since`."""
+    pdfs = glob.glob(os.path.join(WORKSPACE, "*.pdf"))
+    candidates = [p for p in pdfs if os.path.getmtime(p) >= since]
+    if not candidates:
+        return None
+    return max(candidates, key=os.path.getmtime)
+
+
+def send_to_readwise(pdf_path: str, subject: str) -> bool:
+    """Email the PDF to Readwise Reader via gog gmail send."""
+    cmd = [
+        "gog", "gmail", "send",
+        "--to", READWISE_EMAIL,
+        "--subject", subject,
+        "--body", f"Literature review digest: {subject}",
+        "--attach", pdf_path,
+    ]
+    result = subprocess.run(cmd, capture_output=False)
+    return result.returncode == 0
+
+
+def main():
+    today = datetime.now().weekday()
+
+    if today not in CRON_JOBS:
+        print(f"No literature review scheduled for weekday {today}.")
+        sys.exit(0)
+
+    name, job_id = CRON_JOBS[today]
+    day_name = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][today]
+
+    print(f"Today is {day_name} (weekday {today})")
+    print(f"Running: {name}")
+    print(f"Job ID: {job_id}")
+    print()
+
+    before = time.time()
+
+    result = subprocess.run(
+        f"openclaw cron run {job_id}",
+        shell=True,
+        capture_output=False
+    )
+
+    if result.returncode != 0:
+        print(f"[FAIL] {name} exited with code {result.returncode}")
+        sys.exit(1)
+
+    print(f"[OK] {name} completed")
+
+    # Find the PDF produced by this run
+    pdf = find_newest_pdf(before)
+    if not pdf:
+        print(f"[WARN] No new PDF found in {WORKSPACE} — skipping Readwise email")
+        sys.exit(0)
+
+    print(f"Sending PDF to Readwise Reader: {os.path.basename(pdf)}")
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    subject = f"{name} — {date_str}"
+
+    if send_to_readwise(pdf, subject):
+        print(f"[OK] PDF emailed to {READWISE_EMAIL}")
+    else:
+        print(f"[WARN] Failed to email PDF to {READWISE_EMAIL}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
